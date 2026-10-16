@@ -1,108 +1,135 @@
-import streamlit as st
-from PIL import Image
 from io import BytesIO
+from pathlib import Path
+
+import altair as alt
+import numpy as np
+import pandas as pd
+import streamlit as st
+from PIL import Image, ImageOps, UnidentifiedImageError
 
 from processing import (
-    mean_filter,
-    gaussian_filter,
-    histogram,
-    linear_contrast,
-    equalize_gray
+    mean_filter, gaussian_filter, histogram, linear_contrast,
+    equalize_gray, equalize_rgb, equalize_hsv
 )
 
 
-st.set_page_config(
-    page_title="Обработка изображений",
-    layout="wide"
-)
-
+st.set_page_config(page_title="Обработка изображений", layout="wide")
 st.title("Обработка изображений")
+st.write("Сглаживание, гистограммы и повышение контраста")
 
-uploaded_file = st.file_uploader(
-    "Загрузите изображение",
-    type=["png", "jpg", "jpeg", "bmp"]
+examples = {
+    "Цветное изображение": "color.png",
+    "Гауссов шум": "noise.png",
+    "Импульсный шум": "impulse.png",
+    "Малоконтрастное изображение": "low_contrast.png",
+    "Малоконтрастное с чёрной и белой точками": "outliers.png",
+    "Размытое изображение": "blurred.png"
+}
+
+source_type = st.sidebar.radio("Источник", ["Тестовое изображение", "Загрузить своё"])
+
+if source_type == "Тестовое изображение":
+    example = st.sidebar.selectbox("Пример", list(examples))
+    path = Path(__file__).parent / "images" / examples[example]
+    image = Image.open(path).convert("RGB")
+else:
+    uploaded = st.sidebar.file_uploader("Изображение", type=["png", "jpg", "jpeg", "bmp"])
+    if uploaded is None:
+        st.info("Загрузите изображение через боковую панель.")
+        st.stop()
+    try:
+        image = ImageOps.exif_transpose(Image.open(uploaded)).convert("RGB")
+    except (UnidentifiedImageError, OSError, Image.DecompressionBombError):
+        st.error("Не удалось прочитать изображение. Выберите другой файл.")
+        st.stop()
+
+if max(image.size) > 1200:
+    image.thumbnail((1200, 1200))
+    st.caption("Для быстрой обработки изображение уменьшено до 1200 пикселей по большей стороне.")
+
+section = st.sidebar.selectbox(
+    "Раздел", ["Сглаживание", "Контраст серого изображения", "Эквализация цветного изображения"]
 )
 
-if uploaded_file is not None:
-    image = Image.open(uploaded_file).convert("RGB")
-
-    method = st.sidebar.selectbox(
-        "Метод обработки",
-        [
-            "Усредняющий фильтр",
-            "Фильтр Гаусса",
-            "Линейное контрастирование",
-            "Эквализация серого изображения"
-        ]
+if section == "Сглаживание":
+    size = st.sidebar.select_slider("Размер фильтра", [3, 5, 7, 9, 11], value=3)
+    sigma = st.sidebar.slider("Сигма Гаусса", 0.5, 5.0, 1.0, 0.1)
+    results = [
+        ("Исходное", image, "original"),
+        ("Усреднение", mean_filter(image, size), "mean"),
+        ("Гаусс", gaussian_filter(image, size, sigma), "gaussian")
+    ]
+    explanation = (
+        "Усреднение даёт одинаковый вес всем соседям. Фильтр Гаусса сильнее учитывает "
+        "близкие пиксели. Оба фильтра подавляют шум, но размывают границы. "
+        "Размер задаёт область соседей, сигма — распределение весов Гаусса."
     )
-
-    if method in ["Усредняющий фильтр", "Фильтр Гаусса"]:
-        source = image
-
-        size = st.sidebar.select_slider(
-            "Размер фильтра",
-            options=[3, 5, 7, 9, 11],
-            value=3
-        )
-
-        if method == "Усредняющий фильтр":
-            result = mean_filter(image, size)
-        else:
-            sigma = st.sidebar.slider(
-                "Сигма",
-                min_value=0.5,
-                max_value=5.0,
-                value=1.0,
-                step=0.1
-            )
-
-            result = gaussian_filter(image, size, sigma)
-
-    else:
-        source = image.convert("L")
-
-        if method == "Линейное контрастирование":
-            result = linear_contrast(source)
-        else:
-            result = equalize_gray(source)
-
-        st.caption(
-            "Для этих двух методов сравниваем изображения "
-            "в оттенках серого."
-        )
-
-    left, right = st.columns(2)
-
-    with left:
-        st.subheader("Исходное изображение")
-        st.image(source, use_container_width=True)
-
-        st.write("Гистограмма до обработки")
-        st.bar_chart(histogram(source))
-
-    with right:
-        st.subheader("Результат")
-        st.image(result, use_container_width=True)
-
-        st.write("Гистограмма после обработки")
-        st.bar_chart(histogram(result))
-
-    st.caption(
-        "На гистограммах: по горизонтали — яркость от 0 до 255, "
-        "по вертикали — количество пикселей. "
-        "Для цветных изображений показана гистограмма "
-        "после перевода в оттенки серого."
+elif section == "Контраст серого изображения":
+    gray = image.convert("L")
+    results = [
+        ("Исходное серое", gray, "gray"),
+        ("Линейное контрастирование", linear_contrast(gray), "linear"),
+        ("Эквализация", equalize_gray(gray), "equalized")
+    ]
+    explanation = (
+        "Линейное контрастирование растягивает диапазон от минимальной до максимальной "
+        "яркости на 0–255. Эквализация строит нелинейное преобразование по накопленной "
+        "гистограмме. При наличии чёрной и белой точек линейное растяжение не меняет "
+        "изображение, но эквализация может проявить детали. Однотонный канал сохраняется."
     )
-
-    buffer = BytesIO()
-    result.save(buffer, format="PNG")
-
-    st.download_button(
-        "Скачать результат",
-        data=buffer.getvalue(),
-        file_name="result.png",
-        mime="image/png"
-    )
-
 else:
-    st.info("Загрузите изображение, чтобы начать обработку.")
+    results = [
+        ("Исходное RGB", image, "color"),
+        ("Эквализация RGB", equalize_rgb(image), "rgb"),
+        ("Эквализация V в HSV", equalize_hsv(image), "hsv")
+    ]
+    explanation = (
+        "В RGB каждый канал выравнивается отдельно, поэтому соотношение цветов может "
+        "измениться. В HSV изменяется только V, а H и S сохраняются до обратного "
+        "преобразования: обычно это лучше сохраняет цветовую гамму. V — максимум "
+        "компонент RGB, а не физическая яркость. При преобразованиях возможны округления."
+    )
+
+st.info(explanation)
+show_rgb = st.checkbox("Показывать гистограммы R, G, B", value=False)
+charts = []
+for title, result, key in results:
+    if show_rgb and result.mode == "RGB":
+        pixels = np.asarray(result)
+        data = pd.DataFrame({
+            channel: np.bincount(pixels[:, :, i].ravel(), minlength=256)
+            for i, channel in enumerate(["R", "G", "B"])
+        })
+    else:
+        data = pd.DataFrame({"Яркость": histogram(result)})
+    charts.append(data)
+
+maximum_count = max(int(data.to_numpy().max()) for data in charts)
+for column, (title, result, key), data in zip(st.columns(3), results, charts):
+    with column:
+        st.subheader(title)
+        st.image(result, width="stretch")
+        plot_data = data.rename_axis("Значение").reset_index().melt(
+            id_vars="Значение", var_name="Канал", value_name="Количество"
+        )
+        chart = alt.Chart(plot_data).mark_line().encode(
+            x=alt.X("Значение:Q", scale=alt.Scale(domain=[0, 255])),
+            y=alt.Y("Количество:Q", scale=alt.Scale(domain=[0, maximum_count])),
+            color=alt.Color(
+                "Канал:N",
+                scale=alt.Scale(
+                    domain=["R", "G", "B", "Яркость"],
+                    range=["red", "green", "blue", "gray"]
+                )
+            )
+        )
+        st.altair_chart(chart, width="stretch")
+        buffer = BytesIO()
+        result.save(buffer, format="PNG")
+        st.download_button("Скачать PNG", buffer.getvalue(), f"{key}.png", "image/png", key=key)
+
+st.caption(
+    "Гистограмма: по горизонтали — значение 0–255, по вертикали — количество пикселей. "
+    "Масштаб по вертикали одинаков для трёх графиков. Без флажка RGB показана "
+    "яркость после перевода в оттенки серого. Все методы применяются к исходному изображению."
+)
