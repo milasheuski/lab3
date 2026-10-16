@@ -26,7 +26,10 @@ examples = {
     "Размытое изображение": "blurred.png"
 }
 
-source_type = st.sidebar.radio("Источник", ["Тестовое изображение", "Загрузить своё"])
+source_type = st.sidebar.radio(
+    "Источник",
+    ["Загрузить своё", "Тестовое изображение"]
+)
 
 if source_type == "Тестовое изображение":
     example = st.sidebar.selectbox("Пример", list(examples))
